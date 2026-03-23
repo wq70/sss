@@ -213,6 +213,57 @@ window.addEventListener('message', function(e) {
   if (e.data && e.data.type === 'coupleSpaceScreenshotRequest') {
     handleCoupleSpaceScreenshotRequest(e.data);
   }
+
+  // --- Checklist requests ---
+  if (e.data && e.data.type === 'coupleSpaceChecklistAiRequest') {
+    handleCoupleSpaceChecklistAiRequest(e.data);
+  }
+  if (e.data && e.data.type === 'coupleSpaceChecklistCommentRequest') {
+    handleCoupleSpaceChecklistCommentRequest(e.data);
+  }
+  if (e.data && e.data.type === 'coupleSpaceChecklistSettingsChanged') {
+    handleCoupleSpaceChecklistSettingsChanged(e.data);
+  }
+  if (e.data && e.data.type === 'coupleSpaceChecklistHeartRequest') {
+    handleCoupleSpaceChecklistHeartRequest(e.data);
+  }
+  if (e.data && e.data.type === 'coupleSpaceChecklistChanged') {
+    handleCoupleSpaceChecklistChanged(e.data);
+  }
+
+  // --- Message Board requests ---
+  if (e.data && e.data.type === 'coupleSpaceMessageAiRequest') {
+    handleCoupleSpaceMessageAiRequest(e.data);
+  }
+  if (e.data && e.data.type === 'coupleSpaceMessageReplyRequest') {
+    handleCoupleSpaceMessageReplyRequest(e.data);
+  }
+  if (e.data && e.data.type === 'coupleSpaceMessageHeartRequest') {
+    handleCoupleSpaceMessageHeartRequest(e.data);
+  }
+  if (e.data && e.data.type === 'coupleSpaceMessageSettingsChanged') {
+    handleCoupleSpaceMessageSettingsChanged(e.data);
+  }
+  if (e.data && e.data.type === 'coupleSpaceMessageChanged') {
+    handleCoupleSpaceMessageChanged(e.data);
+  }
+
+  // --- Timeline requests ---
+  if (e.data && e.data.type === 'coupleSpaceTimelineAiRequest') {
+    handleCoupleSpaceTimelineAiRequest(e.data);
+  }
+  if (e.data && e.data.type === 'coupleSpaceTimelineCommentRequest') {
+    handleCoupleSpaceTimelineCommentRequest(e.data);
+  }
+  if (e.data && e.data.type === 'coupleSpaceTimelineHeartRequest') {
+    handleCoupleSpaceTimelineHeartRequest(e.data);
+  }
+  if (e.data && e.data.type === 'coupleSpaceTimelineSettingsChanged') {
+    handleCoupleSpaceTimelineSettingsChanged(e.data);
+  }
+  if (e.data && e.data.type === 'coupleSpaceTimelineChanged') {
+    handleCoupleSpaceTimelineChanged(e.data);
+  }
 });
 
 // ========== Diary AI Integration ==========
@@ -327,16 +378,12 @@ function buildDiaryAiContext(chat) {
   const myNickname = chat.settings.myNickname || '我';
   const charName = chat.name;
 
-  // Long-term memory
-  let longTermMemory = '';
-  if (chat.longTermMemory && chat.longTermMemory.length > 0) {
-    longTermMemory = chat.longTermMemory.map(m => '- ' + m.content).join('\n');
-  }
-
-  // Structured memory
-  let structuredMemory = '';
-  if (typeof structuredMemoryManager !== 'undefined') {
-    try { structuredMemory = structuredMemoryManager.serializeForPrompt(chat); } catch(e) {}
+  // Memory: structured or long-term (pick one based on user setting)
+  let memoryContext = '';
+  if (chat.settings.enableStructuredMemory && typeof structuredMemoryManager !== 'undefined') {
+    try { memoryContext = structuredMemoryManager.serializeForPrompt(chat); } catch(e) {}
+  } else if (chat.longTermMemory && chat.longTermMemory.length > 0) {
+    memoryContext = chat.longTermMemory.map(m => '- ' + m.content).join('\n');
   }
 
   // Short-term memory (recent chat)
@@ -447,19 +494,54 @@ function buildDiaryAiContext(chat) {
     } catch(e) {}
   }
 
+  // Checklist context
+  let checklistContext = '';
+  try {
+    const clItems = JSON.parse(localStorage.getItem('coupleChecklist_' + chat.id) || '[]');
+    if (clItems.length > 0) {
+      const pending = clItems.filter(i => !i.done);
+      const done = clItems.filter(i => i.done).slice(-5);
+      if (pending.length > 0) {
+        checklistContext += '待完成:\n' + pending.map(i =>
+          '- "' + i.title + '" (' + i.category + ', ' +
+          (i.author === 'char' ? charName : myNickname) + '创建)'
+        ).join('\n') + '\n';
+      }
+      if (done.length > 0) {
+        checklistContext += '最近完成:\n' + done.map(i =>
+          '- "' + i.title + '" (完成于' + new Date(i.doneAt).toLocaleDateString('zh-CN') + ')'
+        ).join('\n');
+      }
+    }
+  } catch(e) {}
+
+  // Timeline context
+  let timelineContext = '';
+  try {
+    const tlItems = JSON.parse(localStorage.getItem('coupleTimeline_' + chat.id) || '[]');
+    if (tlItems.length > 0) {
+      const recent = tlItems.slice(-5);
+      timelineContext = '最近的时光记录:\n' + recent.map(i =>
+        '- [' + (i.category || 'moment') + '] "' + i.title + '": ' + (i.content || '').substring(0, 80) +
+        ' (' + (i.author === 'char' ? charName : myNickname) + '记录)'
+      ).join('\n');
+    }
+  } catch(e) {}
+
   return {
     aiPersona: chat.settings.aiPersona || '',
     myPersona: chat.settings.myPersona || '',
     myNickname,
     charName,
-    longTermMemory,
-    structuredMemory,
+    memoryContext,
     shortTermMemory,
     linkedMemory,
     worldBook,
     currentTime,
     summaryContext,
-    anniversaryContext
+    anniversaryContext,
+    checklistContext,
+    timelineContext
   };
 }
 
@@ -489,8 +571,9 @@ async function generateCoupleSpaceDiaryAi(chat, data) {
       .replace(/\{\{aiPersona\}\}/g, ctx.aiPersona || '')
       .replace(/\{\{myPersona\}\}/g, ctx.myPersona || '')
       .replace(/\{\{worldBook\}\}/g, ctx.worldBook ? '# 世界观\n' + ctx.worldBook : '')
-      .replace(/\{\{structuredMemory\}\}/g, ctx.structuredMemory || '(暂无结构化记忆)')
-      .replace(/\{\{longTermMemory\}\}/g, ctx.longTermMemory ? '# 长期记忆\n' + ctx.longTermMemory : '')
+      .replace(/\{\{memoryContext\}\}/g, ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : '')
+      .replace(/\{\{structuredMemory\}\}/g, ctx.memoryContext || '(暂无记忆)')
+      .replace(/\{\{longTermMemory\}\}/g, ctx.memoryContext ? '# 记忆\n' + ctx.memoryContext : '')
       .replace(/\{\{shortTermMemory\}\}/g, ctx.shortTermMemory ? '# 最近的对话\n' + ctx.shortTermMemory : '')
       .replace(/\{\{linkedMemory\}\}/g, ctx.linkedMemory ? '# 参考记忆\n' + ctx.linkedMemory : '')
       .replace(/\{\{summaryContext\}\}/g, ctx.summaryContext ? '# 对话总结\n' + ctx.summaryContext : '')
@@ -510,10 +593,7 @@ ${ctx.aiPersona}
 
 ${ctx.worldBook ? '# 世界观\n' + ctx.worldBook : ''}
 
-# 你的记忆
-${ctx.structuredMemory || '(暂无结构化记忆)'}
-
-${ctx.longTermMemory ? '# 长期记忆\n' + ctx.longTermMemory : ''}
+${ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : ''}
 
 ${ctx.shortTermMemory ? '# 最近的对话\n' + ctx.shortTermMemory : ''}
 
@@ -524,6 +604,8 @@ ${ctx.summaryContext ? '# 对话总结\n' + ctx.summaryContext : ''}
 ${recentDiariesText ? '# 最近的日记（避免重复话题）\n' + recentDiariesText : ''}
 
 ${ctx.anniversaryContext ? '# 纪念日\n' + ctx.anniversaryContext : ''}
+
+${ctx.checklistContext ? '# 情侣清单\n' + ctx.checklistContext : ''}
 
 # 当前时间
 ${ctx.currentTime}
@@ -594,8 +676,7 @@ ${ctx.aiPersona}
 - 心情: ${data.diaryMood || '未标注'}
 - 作者: ${data.diaryAuthor === 'user' ? ctx.myNickname : ctx.charName}
 
-${ctx.structuredMemory ? '# 你的记忆\n' + ctx.structuredMemory : ''}
-${ctx.longTermMemory ? '# 长期记忆\n' + ctx.longTermMemory : ''}
+${ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : ''}
 
 # 输出要求
 直接返回评语文本，不要JSON格式，不要引号包裹。
@@ -903,8 +984,7 @@ ${ctx.aiPersona}
 - 标签: ${tagsText}
 - 作者: ${data.photoAuthor === 'user' ? ctx.myNickname : ctx.charName}
 
-${ctx.structuredMemory ? '# 你的记忆\n' + ctx.structuredMemory : ''}
-${ctx.longTermMemory ? '# 长期记忆\n' + ctx.longTermMemory : ''}
+${ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : ''}
 
 # 输出要求
 直接返回评论文本，不要JSON格式，不要引号包裹。
@@ -968,10 +1048,7 @@ ${ctx.aiPersona}
 
 ${ctx.worldBook ? '# 世界观\n' + ctx.worldBook : ''}
 
-# 你的记忆
-${ctx.structuredMemory || '(暂无结构化记忆)'}
-
-${ctx.longTermMemory ? '# 长期记忆\n' + ctx.longTermMemory : ''}
+${ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : ''}
 
 ${ctx.shortTermMemory ? '# 最近的对话\n' + ctx.shortTermMemory : ''}
 
@@ -982,6 +1059,8 @@ ${ctx.summaryContext ? '# 对话总结\n' + ctx.summaryContext : ''}
 ${recentPhotosText ? '# 最近的相册照片（避免重复内容）\n' + recentPhotosText : ''}
 
 ${ctx.anniversaryContext ? '# 纪念日\n' + ctx.anniversaryContext : ''}
+
+${ctx.checklistContext ? '# 情侣清单\n' + ctx.checklistContext : ''}
 
 # 当前时间
 ${ctx.currentTime}
@@ -1268,9 +1347,7 @@ ${ctx.myPersona ? '伴侣的人设:\n' + ctx.myPersona + '\n' : ''}
 最近的对话:
 ${ctx.shortTermMemory || '(无)'}
 
-${ctx.longTermMemory ? '长期记忆:\n' + ctx.longTermMemory : ''}
-
-${ctx.structuredMemory ? '结构化记忆:\n' + ctx.structuredMemory : ''}
+${ctx.memoryContext ? '记忆:\n' + ctx.memoryContext : ''}
 
 ${ctx.summaryContext ? '对话总结:\n' + ctx.summaryContext : ''}
 
@@ -1283,7 +1360,7 @@ ${existingList}
 要求：
 - 不要和已有纪念日重复
 - 选择真正有意义的事件（第一次做某事、重要承诺、特别的日子等）
-- date 必须严格基于对话记录、长期记忆、结构化记忆或人设中明确提到的日期或事件
+- date 必须严格基于对话记录、记忆或人设中明确提到的日期或事件
 - 如果对话/记忆中明确提到了某个过去的日期（比如"我们200天前在一起了"），可以使用那个真实日期
 - 如果对话/记忆中没有提到具体的过去日期，只能使用今天(${todayStr})或最近几天的日期
 - 绝对不要凭空编造一个很久以前的日期！只有记忆中有明确依据才能用过去的日期
@@ -1410,9 +1487,7 @@ ${ctx.myPersona ? '伴侣的人设:\n' + ctx.myPersona + '\n' : ''}
 最近的对话:
 ${ctx.shortTermMemory || '(无)'}
 
-${ctx.longTermMemory ? '长期记忆:\n' + ctx.longTermMemory : ''}
-
-${ctx.structuredMemory ? '结构化记忆:\n' + ctx.structuredMemory : ''}
+${ctx.memoryContext ? '记忆:\n' + ctx.memoryContext : ''}
 
 ${ctx.summaryContext ? '对话总结:\n' + ctx.summaryContext : ''}
 
@@ -1428,7 +1503,7 @@ ${existingList}
 重要规则：
 - 不要和已有纪念日重复
 - 只有真正有意义的事件才值得创建
-- date 必须严格基于对话记录、长期记忆、结构化记忆或人设中明确提到的日期或事件
+- date 必须严格基于对话记录、记忆或人设中明确提到的日期或事件
 - 如果对话/记忆中明确提到了某个过去的日期（比如"我们200天前确认了关系"），可以使用那个真实日期
 - 如果对话/记忆中没有提到具体的过去日期，只能使用今天(${todayStr})或最近几天的日期
 - 绝对不要凭空编造一个很久以前的日期！只有记忆中有明确依据才能用过去的日期
@@ -1498,6 +1573,1194 @@ ${existingList}
 
 // Start discovery on load
 try { setupCoupleSpaceAnnivDiscovery(); } catch(e) {}
+
+// ========== Checklist AI Integration ==========
+
+function handleCoupleSpaceChecklistChanged(data) {
+  localStorage.setItem('coupleChecklist_' + data.charId, JSON.stringify(data.items || []));
+}
+
+function handleCoupleSpaceChecklistSettingsChanged(data) {
+  localStorage.setItem('coupleChecklistSettings_' + data.charId, JSON.stringify(data.settings || {}));
+  setupCoupleSpaceChecklistAutoTimer();
+}
+
+async function handleCoupleSpaceChecklistAiRequest(data) {
+  const iframe = document.getElementById('couple-space-iframe');
+  if (!iframe || !iframe.contentWindow) return;
+  const chat = state.chats[data.charId];
+  if (!chat) {
+    iframe.contentWindow.postMessage({ type: 'coupleSpaceChecklistAiResult', error: true }, '*');
+    return;
+  }
+  try {
+    const result = await generateCoupleSpaceChecklistAi(chat, data);
+    iframe.contentWindow.postMessage({
+      type: 'coupleSpaceChecklistAiResult',
+      title: result.title,
+      category: result.category,
+      priority: result.priority,
+      note: result.note
+    }, '*');
+  } catch(err) {
+    console.error('Checklist AI error:', err);
+    iframe.contentWindow.postMessage({ type: 'coupleSpaceChecklistAiResult', error: true }, '*');
+  }
+}
+
+async function handleCoupleSpaceChecklistCommentRequest(data) {
+  const iframe = document.getElementById('couple-space-iframe');
+  if (!iframe || !iframe.contentWindow) return;
+  const chat = state.chats[data.charId];
+  if (!chat) {
+    iframe.contentWindow.postMessage({ type: 'coupleSpaceChecklistCommentResult', itemId: data.itemId, error: true }, '*');
+    return;
+  }
+  try {
+    const comment = await generateCoupleSpaceChecklistComment(chat, data);
+    iframe.contentWindow.postMessage({
+      type: 'coupleSpaceChecklistCommentResult',
+      itemId: data.itemId,
+      comment: comment
+    }, '*');
+  } catch(err) {
+    console.error('Checklist comment AI error:', err);
+    iframe.contentWindow.postMessage({ type: 'coupleSpaceChecklistCommentResult', itemId: data.itemId, error: true }, '*');
+  }
+}
+
+async function handleCoupleSpaceChecklistHeartRequest(data) {
+  const iframe = document.getElementById('couple-space-iframe');
+  if (!iframe || !iframe.contentWindow) return;
+  const chat = state.chats[data.charId];
+  if (!chat) return;
+
+  try {
+    const ctx = buildDiaryAiContext(chat);
+    const { proxyUrl, apiKey, model } = state.apiConfig;
+    if (!proxyUrl || !apiKey || !model) return;
+
+    const prompt = `你是"${ctx.charName}"。你的伴侣"${ctx.myNickname}"给清单项"${data.itemTitle}"点了爱心。
+备注: ${data.itemNote || '(无)'}
+
+你会不会也想给这个清单项点爱心？考虑你的性格和你们的关系。
+请只回答 "yes" 或 "no"，不要其他内容。`;
+
+    const isGemini = proxyUrl === GEMINI_API_URL;
+    let response;
+    if (isGemini) {
+      const geminiConfig = toGeminiRequestData(model, apiKey, prompt, [{ role: 'user', content: '你要点爱心吗？' }]);
+      response = await fetch(geminiConfig.url, geminiConfig.data);
+    } else {
+      response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'system', content: prompt }, { role: 'user', content: '你要点爱心吗？' }],
+          temperature: 0.7
+        })
+      });
+    }
+    if (!response.ok) return;
+    const respData = await response.json();
+    const answer = getGeminiResponseText(respData).trim().toLowerCase();
+    const liked = answer.includes('yes');
+
+    iframe.contentWindow.postMessage({
+      type: 'coupleSpaceChecklistHeartResult',
+      itemId: data.itemId,
+      liked: liked
+    }, '*');
+  } catch(e) {
+    console.error('Checklist heart AI error:', e);
+  }
+}
+
+async function generateCoupleSpaceChecklistAi(chat, data) {
+  const { proxyUrl, apiKey, model } = state.apiConfig;
+  if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
+
+  const ctx = buildDiaryAiContext(chat);
+
+  const clSettings = data.checklistSettings || {};
+  const maxCharVisible = clSettings.visibleCharItems ?? 10;
+  const maxUserVisible = clSettings.visibleUserItems ?? 10;
+
+  const items = data.existingItems || [];
+  const charItems = items.filter(i => i.author === 'char').slice(-maxCharVisible);
+  const userItems = items.filter(i => i.author === 'user').slice(-maxUserVisible);
+
+  let existingCharItemsText = '';
+  if (charItems.length > 0) {
+    existingCharItemsText = charItems.map(i =>
+      '- ' + (i.done ? '[✓] ' : '[ ] ') + '"' + i.title + '" (' + i.category + ')' +
+      (i.note ? ' — ' + i.note : '')
+    ).join('\n');
+  }
+
+  let existingUserItemsText = '';
+  if (userItems.length > 0) {
+    existingUserItemsText = userItems.map(i =>
+      '- ' + (i.done ? '[✓] ' : '[ ] ') + '"' + i.title + '" (' + i.category + ')' +
+      (i.note ? ' — ' + i.note : '')
+    ).join('\n');
+  }
+
+  let systemPrompt;
+  if (clSettings.enableCustomPrompt && clSettings.customPrompt) {
+    systemPrompt = clSettings.customPrompt
+      .replace(/\{\{charName\}\}/g, ctx.charName)
+      .replace(/\{\{myNickname\}\}/g, ctx.myNickname)
+      .replace(/\{\{aiPersona\}\}/g, ctx.aiPersona || '')
+      .replace(/\{\{myPersona\}\}/g, ctx.myPersona || '')
+      .replace(/\{\{worldBook\}\}/g, ctx.worldBook ? '# 世界观\n' + ctx.worldBook : '')
+      .replace(/\{\{memoryContext\}\}/g, ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : '')
+      .replace(/\{\{shortTermMemory\}\}/g, ctx.shortTermMemory ? '# 最近的对话\n' + ctx.shortTermMemory : '')
+      .replace(/\{\{linkedMemory\}\}/g, ctx.linkedMemory ? '# 参考记忆\n' + ctx.linkedMemory : '')
+      .replace(/\{\{summaryContext\}\}/g, ctx.summaryContext ? '# 对话总结\n' + ctx.summaryContext : '')
+      .replace(/\{\{existingCharItems\}\}/g, existingCharItemsText ? '# 你之前推荐的清单项\n' + existingCharItemsText : '')
+      .replace(/\{\{existingUserItems\}\}/g, existingUserItemsText ? '# 伴侣创建的清单项\n' + existingUserItemsText : '')
+      .replace(/\{\{currentTime\}\}/g, ctx.currentTime)
+      .replace(/\{\{anniversaryContext\}\}/g, ctx.anniversaryContext ? '# 纪念日\n' + ctx.anniversaryContext : '');
+  } else {
+    systemPrompt = `# 你的任务
+你是"${ctx.charName}"，现在要在情侣空间的清单里推荐一件想和伴侣"${ctx.myNickname}"一起做的事。
+
+# 你的角色设定
+${ctx.aiPersona}
+
+# 你的伴侣
+- 昵称: ${ctx.myNickname}
+- 人设: ${ctx.myPersona}
+
+${ctx.worldBook ? '# 世界观\n' + ctx.worldBook : ''}
+
+${ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : ''}
+
+${ctx.shortTermMemory ? '# 最近的对话\n' + ctx.shortTermMemory : ''}
+
+${ctx.linkedMemory ? '# 参考记忆\n' + ctx.linkedMemory : ''}
+
+${ctx.summaryContext ? '# 对话总结\n' + ctx.summaryContext : ''}
+
+${ctx.anniversaryContext ? '# 纪念日\n' + ctx.anniversaryContext : ''}
+
+${existingCharItemsText ? '# 你之前推荐的清单项（避免重复）\n' + existingCharItemsText : ''}
+
+${existingUserItemsText ? '# 伴侣创建的清单项（参考）\n' + existingUserItemsText : ''}
+
+# 当前时间
+${ctx.currentTime}
+
+# 输出要求
+请以JSON格式返回，不要输出任何其他内容：
+{"title": "清单标题", "category": "分类ID", "priority": "优先级ID", "note": "为什么想做这件事"}
+
+分类ID可选值: travel, food, experience, daily, custom
+优先级ID可选值: wish(遥远的愿望), low(不急), normal(一般), high(很想做)
+
+# 要求
+- 基于你的记忆和最近的对话来推荐，不要凭空编造
+- 不要和已有清单项重复
+- 可以是旅行、美食、体验、日常小事、浪漫的事等
+- note 要像真人说话，体现你的性格，说明为什么想做
+- 字数控制在 20-80 字
+- 绝对不要提到你是AI`;
+  }
+
+  const messages = [{ role: 'user', content: '推荐一件想一起做的事吧。' }];
+
+  const isGemini = proxyUrl === GEMINI_API_URL;
+  let response;
+  if (isGemini) {
+    const geminiConfig = toGeminiRequestData(model, apiKey, systemPrompt, messages);
+    response = await fetch(geminiConfig.url, geminiConfig.data);
+  } else {
+    response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'system', content: systemPrompt }, ...messages],
+        temperature: state.globalSettings.apiTemperature || 0.8
+      })
+    });
+  }
+
+  if (!response.ok) throw new Error('API请求失败: ' + response.status);
+  const respData = await response.json();
+  const raw = getGeminiResponseText(respData).replace(/^```json\s*/, '').replace(/```$/, '').trim();
+  return JSON.parse(raw);
+}
+
+async function generateCoupleSpaceChecklistComment(chat, data) {
+  const { proxyUrl, apiKey, model } = state.apiConfig;
+  if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
+
+  const ctx = buildDiaryAiContext(chat);
+
+  const systemPrompt = `# 你的任务
+你是"${ctx.charName}"。情侣清单里的"${data.itemTitle}"被标记为完成了。
+
+# 你的角色设定
+${ctx.aiPersona}
+
+# 你的伴侣
+- 昵称: ${ctx.myNickname}
+- 人设: ${ctx.myPersona}
+
+${ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : ''}
+
+${ctx.shortTermMemory ? '# 最近的对话\n' + ctx.shortTermMemory : ''}
+
+# 清单项信息
+- 标题: ${data.itemTitle}
+- 分类: ${data.itemCategory || '未分类'}
+- 创建者: ${data.itemAuthor === 'char' ? ctx.charName : ctx.myNickname}
+- 完成者: ${data.doneBy === 'char' ? ctx.charName : ctx.myNickname}
+- 完成感想: ${data.doneNote || '(无)'}
+
+# 当前时间
+${ctx.currentTime}
+
+# 要求
+请写一段简短的评论（30-100字），表达你对完成这件事的感受。
+直接返回评论文本，不要任何格式包裹。
+语气要符合你的角色设定，像真人一样自然。
+绝对不要提到你是AI。`;
+
+  const messages = [{ role: 'user', content: '写一段完成感想吧。' }];
+
+  const isGemini = proxyUrl === GEMINI_API_URL;
+  let response;
+  if (isGemini) {
+    const geminiConfig = toGeminiRequestData(model, apiKey, systemPrompt, messages);
+    response = await fetch(geminiConfig.url, geminiConfig.data);
+  } else {
+    response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'system', content: systemPrompt }, ...messages],
+        temperature: state.globalSettings.apiTemperature || 0.8
+      })
+    });
+  }
+
+  if (!response.ok) throw new Error('API请求失败: ' + response.status);
+  const respData = await response.json();
+  return getGeminiResponseText(respData).replace(/^["']|["']$/g, '').trim();
+}
+
+// ========== Auto Checklist Scheduler ==========
+let coupleSpaceChecklistTimers = {};
+
+function setupCoupleSpaceChecklistAutoTimer() {
+  Object.values(coupleSpaceChecklistTimers).forEach(t => clearInterval(t));
+  coupleSpaceChecklistTimers = {};
+
+  const spaces = getCoupleSpaces();
+  spaces.forEach(space => {
+    try {
+      const settings = JSON.parse(localStorage.getItem('coupleChecklistSettings_' + space.charId) || '{}');
+      if (settings.autoEnabled && settings.autoTime) {
+        scheduleChecklistAutoRecommend(space.charId, settings.autoTime);
+      }
+    } catch(e) {}
+  });
+}
+
+function scheduleChecklistAutoRecommend(charId, timeStr) {
+  coupleSpaceChecklistTimers[charId] = setInterval(() => {
+    const now = new Date();
+    const [h, m] = timeStr.split(':').map(Number);
+    if (now.getHours() === h && now.getMinutes() === m) {
+      const todayKey = 'coupleChecklistAutoLast_' + charId;
+      const lastDate = localStorage.getItem(todayKey);
+      const todayStr = now.toISOString().split('T')[0];
+      if (lastDate === todayStr) return;
+      localStorage.setItem(todayKey, todayStr);
+      triggerAutoChecklistRecommend(charId);
+    }
+  }, 60000);
+}
+
+async function triggerAutoChecklistRecommend(charId) {
+  const chat = state.chats[charId];
+  if (!chat) return;
+
+  const settings = JSON.parse(localStorage.getItem('coupleChecklistSettings_' + charId) || '{}');
+
+  if (settings.aiDecide) {
+    const ctx = buildDiaryAiContext(chat);
+    const { proxyUrl, apiKey, model } = state.apiConfig;
+    if (!proxyUrl || !apiKey || !model) return;
+
+    const prompt = `你是"${ctx.charName}"。根据你最近和"${ctx.myNickname}"的互动，判断是否想推荐一件想一起做的事。
+最近的对话:
+${ctx.shortTermMemory || '(无)'}
+${ctx.summaryContext ? '对话总结:\n' + ctx.summaryContext : ''}
+请只回答 "yes" 或 "no"，不要其他内容。`;
+
+    try {
+      const isGemini = proxyUrl === GEMINI_API_URL;
+      let response;
+      if (isGemini) {
+        const geminiConfig = toGeminiRequestData(model, apiKey, prompt, [{ role: 'user', content: '想推荐清单吗？' }]);
+        response = await fetch(geminiConfig.url, geminiConfig.data);
+      } else {
+        response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'system', content: prompt }, { role: 'user', content: '想推荐清单吗？' }],
+            temperature: 0.5
+          })
+        });
+      }
+      if (!response.ok) return;
+      const respData = await response.json();
+      const answer = getGeminiResponseText(respData).trim().toLowerCase();
+      if (!answer.includes('yes')) return;
+    } catch(e) { return; }
+  }
+
+  try {
+    const existingItems = JSON.parse(localStorage.getItem('coupleChecklist_' + charId) || '[]');
+    const result = await generateCoupleSpaceChecklistAi(chat, {
+      charId,
+      existingItems,
+      checklistSettings: settings
+    });
+
+    const newItem = {
+      id: 'cl_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+      title: result.title,
+      category: result.category || 'custom',
+      priority: result.priority || 'normal',
+      note: result.note || '',
+      done: false,
+      doneAt: null,
+      author: 'char',
+      createdAt: Date.now(),
+      doneNote: '',
+      hearts: { char: true },
+      comments: []
+    };
+
+    existingItems.push(newItem);
+    localStorage.setItem('coupleChecklist_' + charId, JSON.stringify(existingItems));
+
+    const iframe = document.getElementById('couple-space-iframe');
+    if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({
+        type: 'coupleSpaceChecklistAutoResult',
+        item: newItem
+      }, '*');
+    }
+  } catch(err) {
+    console.error('Auto checklist recommend failed:', err);
+  }
+}
+
+// Initialize checklist timers
+if (typeof setTimeout !== 'undefined') {
+  setTimeout(setupCoupleSpaceChecklistAutoTimer, 7000);
+}
+
+// ========== Message Board AI Integration ==========
+
+function handleCoupleSpaceMessageChanged(data) {
+  localStorage.setItem('coupleMessages_' + data.charId, JSON.stringify(data.items || []));
+}
+
+function handleCoupleSpaceMessageSettingsChanged(data) {
+  localStorage.setItem('coupleMessageSettings_' + data.charId, JSON.stringify(data.settings || {}));
+  setupCoupleSpaceMessageAutoTimer();
+}
+
+async function handleCoupleSpaceMessageAiRequest(data) {
+  const iframe = document.getElementById('couple-space-iframe');
+  if (!iframe || !iframe.contentWindow) return;
+  const chat = state.chats[data.charId];
+  if (!chat) {
+    iframe.contentWindow.postMessage({ type: 'coupleSpaceMessageAiResult', error: true }, '*');
+    return;
+  }
+  try {
+    const result = await generateCoupleSpaceMessageAi(chat, data);
+    iframe.contentWindow.postMessage({
+      type: 'coupleSpaceMessageAiResult',
+      content: result.content,
+      sticker: result.sticker || 'none'
+    }, '*');
+  } catch(err) {
+    console.error('Message AI error:', err);
+    iframe.contentWindow.postMessage({ type: 'coupleSpaceMessageAiResult', error: true }, '*');
+  }
+}
+
+async function handleCoupleSpaceMessageReplyRequest(data) {
+  const iframe = document.getElementById('couple-space-iframe');
+  if (!iframe || !iframe.contentWindow) return;
+  const chat = state.chats[data.charId];
+  if (!chat) {
+    iframe.contentWindow.postMessage({ type: 'coupleSpaceMessageReplyResult', msgId: data.msgId, error: true }, '*');
+    return;
+  }
+  try {
+    const reply = await generateCoupleSpaceMessageReply(chat, data);
+    iframe.contentWindow.postMessage({
+      type: 'coupleSpaceMessageReplyResult',
+      msgId: data.msgId,
+      reply: reply
+    }, '*');
+  } catch(err) {
+    console.error('Message reply AI error:', err);
+    iframe.contentWindow.postMessage({ type: 'coupleSpaceMessageReplyResult', msgId: data.msgId, error: true }, '*');
+  }
+}
+
+async function handleCoupleSpaceMessageHeartRequest(data) {
+  const iframe = document.getElementById('couple-space-iframe');
+  if (!iframe || !iframe.contentWindow) return;
+  const chat = state.chats[data.charId];
+  if (!chat) return;
+
+  try {
+    const ctx = buildDiaryAiContext(chat);
+    const { proxyUrl, apiKey, model } = state.apiConfig;
+    if (!proxyUrl || !apiKey || !model) return;
+
+    const prompt = `你是"${ctx.charName}"。你的伴侣"${ctx.myNickname}"给留言"${data.msgContent}"点了爱心。
+你会不会也想给这条留言点爱心？考虑你的性格和你们的关系。
+请只回答 "yes" 或 "no"，不要其他内容。`;
+
+    const isGemini = proxyUrl === GEMINI_API_URL;
+    let response;
+    if (isGemini) {
+      const geminiConfig = toGeminiRequestData(model, apiKey, prompt, [{ role: 'user', content: '你要点爱心吗？' }]);
+      response = await fetch(geminiConfig.url, geminiConfig.data);
+    } else {
+      response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'system', content: prompt }, { role: 'user', content: '你要点爱心吗？' }],
+          temperature: 0.7
+        })
+      });
+    }
+    if (!response.ok) return;
+    const respData = await response.json();
+    const answer = getGeminiResponseText(respData).trim().toLowerCase();
+    const liked = answer.includes('yes');
+
+    iframe.contentWindow.postMessage({
+      type: 'coupleSpaceMessageHeartResult',
+      msgId: data.msgId,
+      liked: liked
+    }, '*');
+  } catch(e) {
+    console.error('Message heart AI error:', e);
+  }
+}
+
+async function generateCoupleSpaceMessageAi(chat, data) {
+  const { proxyUrl, apiKey, model } = state.apiConfig;
+  if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
+
+  const ctx = buildDiaryAiContext(chat);
+
+  const msgSettings = data.messageSettings || {};
+  const maxCharVisible = msgSettings.visibleCharMessages ?? 10;
+  const maxUserVisible = msgSettings.visibleUserMessages ?? 10;
+
+  const items = data.existingMessages || [];
+  const charMsgs = items.filter(i => i.author === 'char').slice(-maxCharVisible);
+  const userMsgs = items.filter(i => i.author === 'user').slice(-maxUserVisible);
+
+  let existingCharMsgsText = '';
+  if (charMsgs.length > 0) {
+    existingCharMsgsText = charMsgs.map(m => {
+      let line = '- "' + m.content + '"';
+      if (m.comments && m.comments.length > 0) {
+        line += '\n  评论: ' + m.comments.map(c => (c.author === 'char' ? ctx.charName : ctx.myNickname) + ': ' + c.content).join(' | ');
+      }
+      return line;
+    }).join('\n');
+  }
+
+  let existingUserMsgsText = '';
+  if (userMsgs.length > 0) {
+    existingUserMsgsText = userMsgs.map(m => {
+      let line = '- "' + m.content + '"';
+      if (m.comments && m.comments.length > 0) {
+        line += '\n  评论: ' + m.comments.map(c => (c.author === 'char' ? ctx.charName : ctx.myNickname) + ': ' + c.content).join(' | ');
+      }
+      return line;
+    }).join('\n');
+  }
+
+  let systemPrompt;
+  if (msgSettings.enableCustomPrompt && msgSettings.customPrompt) {
+    systemPrompt = msgSettings.customPrompt
+      .replace(/\{\{charName\}\}/g, ctx.charName)
+      .replace(/\{\{myNickname\}\}/g, ctx.myNickname)
+      .replace(/\{\{aiPersona\}\}/g, ctx.aiPersona || '')
+      .replace(/\{\{myPersona\}\}/g, ctx.myPersona || '')
+      .replace(/\{\{worldBook\}\}/g, ctx.worldBook ? '# 世界观\n' + ctx.worldBook : '')
+      .replace(/\{\{memoryContext\}\}/g, ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : '')
+      .replace(/\{\{shortTermMemory\}\}/g, ctx.shortTermMemory ? '# 最近的对话\n' + ctx.shortTermMemory : '')
+      .replace(/\{\{linkedMemory\}\}/g, ctx.linkedMemory ? '# 参考记忆\n' + ctx.linkedMemory : '')
+      .replace(/\{\{summaryContext\}\}/g, ctx.summaryContext ? '# 对话总结\n' + ctx.summaryContext : '')
+      .replace(/\{\{existingCharMessages\}\}/g, existingCharMsgsText ? '# 你之前的留言\n' + existingCharMsgsText : '')
+      .replace(/\{\{existingUserMessages\}\}/g, existingUserMsgsText ? '# 伴侣的留言\n' + existingUserMsgsText : '')
+      .replace(/\{\{currentTime\}\}/g, ctx.currentTime)
+      .replace(/\{\{anniversaryContext\}\}/g, ctx.anniversaryContext ? '# 纪念日\n' + ctx.anniversaryContext : '');
+  } else {
+    systemPrompt = `# 你的任务
+你是"${ctx.charName}"，现在要在情侣空间的留言板上给"${ctx.myNickname}"留一条言。
+留言板是你们之间的小纸条，随意、温暖、真实。
+
+# 你的角色设定
+${ctx.aiPersona}
+
+# 你的伴侣
+- 昵称: ${ctx.myNickname}
+- 人设: ${ctx.myPersona}
+
+${ctx.worldBook ? '# 世界观\n' + ctx.worldBook : ''}
+
+${ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : ''}
+
+${ctx.shortTermMemory ? '# 最近的对话\n' + ctx.shortTermMemory : ''}
+
+${ctx.linkedMemory ? '# 参考记忆\n' + ctx.linkedMemory : ''}
+
+${ctx.summaryContext ? '# 对话总结\n' + ctx.summaryContext : ''}
+
+${ctx.anniversaryContext ? '# 纪念日\n' + ctx.anniversaryContext : ''}
+
+${ctx.checklistContext ? '# 情侣清单\n' + ctx.checklistContext : ''}
+
+${existingCharMsgsText ? '# 你之前的留言（避免重复话题）\n' + existingCharMsgsText : ''}
+
+${existingUserMsgsText ? '# 伴侣的留言（参考）\n' + existingUserMsgsText : ''}
+
+# 当前时间
+${ctx.currentTime}
+
+# 输出要求
+请以JSON格式返回，不要输出任何其他内容：
+{"content": "留言内容", "sticker": "分类ID"}
+
+分类ID可选值: none(无), love(表白), miss(想念), care(关心), share(分享), daily(日常)
+（选一个最符合留言氛围的，或 none）
+
+# 写作要求
+- 像在便签纸上写给对方的话，自然随意
+- 可以是想说的话、碎碎念、撒娇、关心、分享心情、表白等
+- 字数在15-200字之间，不要太长
+- 语气要符合你的角色设定
+- 基于记忆和最近的对话，不要凭空编造
+- 和日记不同，留言更短更直接，是说给对方听的
+- 绝对不要提到你是AI`;
+  }
+
+  const messages = [{ role: 'user', content: '请留一条言吧。' }];
+
+  const isGemini = proxyUrl === GEMINI_API_URL;
+  let response;
+  if (isGemini) {
+    const geminiConfig = toGeminiRequestData(model, apiKey, systemPrompt, messages);
+    response = await fetch(geminiConfig.url, geminiConfig.data);
+  } else {
+    response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'system', content: systemPrompt }, ...messages],
+        temperature: state.globalSettings.apiTemperature || 0.8
+      })
+    });
+  }
+
+  if (!response.ok) throw new Error('API请求失败: ' + response.status);
+  const respData = await response.json();
+  const raw = getGeminiResponseText(respData).replace(/^```json\s*/, '').replace(/```$/, '').trim();
+  return JSON.parse(raw);
+}
+
+async function generateCoupleSpaceMessageReply(chat, data) {
+  const { proxyUrl, apiKey, model } = state.apiConfig;
+  if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
+
+  const ctx = buildDiaryAiContext(chat);
+
+  const systemPrompt = `# 你的任务
+你是"${ctx.charName}"。"${ctx.myNickname}"在留言板上给你留了一条言，请你回复。
+
+# 你的角色设定
+${ctx.aiPersona}
+
+# 你的伴侣
+- 昵称: ${ctx.myNickname}
+- 人设: ${ctx.myPersona}
+
+# 留言信息
+- 内容: ${data.msgContent}
+- 时间: ${data.msgDate || ''}
+
+${ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : ''}
+
+${ctx.shortTermMemory ? '# 最近的对话\n' + ctx.shortTermMemory : ''}
+
+# 当前时间
+${ctx.currentTime}
+
+# 要求
+直接返回回复文本，不要JSON格式，不要引号包裹。
+- 像真人回复留言一样自然
+- 字数在10-100字之间
+- 语气符合你的角色设定
+- 可以回应内容、表达感受、撒娇、逗趣
+- 绝对不要提到你是AI`;
+
+  const messages = [{ role: 'user', content: '请回复这条留言。' }];
+
+  const isGemini = proxyUrl === GEMINI_API_URL;
+  let response;
+  if (isGemini) {
+    const geminiConfig = toGeminiRequestData(model, apiKey, systemPrompt, messages);
+    response = await fetch(geminiConfig.url, geminiConfig.data);
+  } else {
+    response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'system', content: systemPrompt }, ...messages],
+        temperature: state.globalSettings.apiTemperature || 0.8
+      })
+    });
+  }
+
+  if (!response.ok) throw new Error('API请求失败: ' + response.status);
+  const respData = await response.json();
+  return getGeminiResponseText(respData).replace(/^["']|["']$/g, '').trim();
+}
+
+// ========== Auto Message Scheduler ==========
+let coupleSpaceMessageTimers = {};
+
+function setupCoupleSpaceMessageAutoTimer() {
+  Object.values(coupleSpaceMessageTimers).forEach(t => clearInterval(t));
+  coupleSpaceMessageTimers = {};
+
+  const spaces = getCoupleSpaces();
+  spaces.forEach(space => {
+    try {
+      const settings = JSON.parse(localStorage.getItem('coupleMessageSettings_' + space.charId) || '{}');
+      if (settings.autoEnabled && settings.autoTime) {
+        scheduleMessageAutoPost(space.charId, settings.autoTime);
+      }
+    } catch(e) {}
+  });
+}
+
+function scheduleMessageAutoPost(charId, timeStr) {
+  coupleSpaceMessageTimers[charId] = setInterval(() => {
+    const now = new Date();
+    const [h, m] = timeStr.split(':').map(Number);
+    if (now.getHours() === h && now.getMinutes() === m) {
+      const todayKey = 'coupleMessageAutoLast_' + charId;
+      const lastDate = localStorage.getItem(todayKey);
+      const todayStr = now.toISOString().split('T')[0];
+      if (lastDate === todayStr) return;
+      localStorage.setItem(todayKey, todayStr);
+      triggerAutoMessagePost(charId);
+    }
+  }, 60000);
+}
+
+async function triggerAutoMessagePost(charId) {
+  const chat = state.chats[charId];
+  if (!chat) return;
+
+  const settings = JSON.parse(localStorage.getItem('coupleMessageSettings_' + charId) || '{}');
+
+  if (settings.aiDecide) {
+    const ctx = buildDiaryAiContext(chat);
+    const { proxyUrl, apiKey, model } = state.apiConfig;
+    if (!proxyUrl || !apiKey || !model) return;
+
+    const prompt = `你是"${ctx.charName}"。根据你最近和"${ctx.myNickname}"的互动，判断是否想在留言板上留一条言。
+最近的对话:
+${ctx.shortTermMemory || '(无)'}
+${ctx.summaryContext ? '对话总结:\n' + ctx.summaryContext : ''}
+请只回答 "yes" 或 "no"，不要其他内容。`;
+
+    try {
+      const isGemini = proxyUrl === GEMINI_API_URL;
+      let response;
+      if (isGemini) {
+        const geminiConfig = toGeminiRequestData(model, apiKey, prompt, [{ role: 'user', content: '想留言吗？' }]);
+        response = await fetch(geminiConfig.url, geminiConfig.data);
+      } else {
+        response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'system', content: prompt }, { role: 'user', content: '想留言吗？' }],
+            temperature: 0.5
+          })
+        });
+      }
+      if (!response.ok) return;
+      const respData = await response.json();
+      const answer = getGeminiResponseText(respData).trim().toLowerCase();
+      if (!answer.includes('yes')) return;
+    } catch(e) { return; }
+  }
+
+  try {
+    const existingMessages = JSON.parse(localStorage.getItem('coupleMessages_' + charId) || '[]');
+    const result = await generateCoupleSpaceMessageAi(chat, {
+      charId,
+      existingMessages,
+      messageSettings: settings
+    });
+
+    const newMsg = {
+      id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+      content: result.content,
+      sticker: result.sticker || 'none',
+      author: 'char',
+      createdAt: Date.now(),
+      hearts: { char: true },
+      comments: []
+    };
+
+    existingMessages.push(newMsg);
+    localStorage.setItem('coupleMessages_' + charId, JSON.stringify(existingMessages));
+
+    const iframe = document.getElementById('couple-space-iframe');
+    if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({
+        type: 'coupleSpaceMessageAutoResult',
+        item: newMsg
+      }, '*');
+    }
+  } catch(err) {
+    console.error('Auto message post failed:', err);
+  }
+}
+
+// Initialize message timers
+if (typeof setTimeout !== 'undefined') {
+  setTimeout(setupCoupleSpaceMessageAutoTimer, 8000);
+}
+
+// ========== Timeline (时光轴) Integration ==========
+
+function handleCoupleSpaceTimelineChanged(data) {
+  localStorage.setItem('coupleTimeline_' + data.charId, JSON.stringify(data.items || []));
+}
+
+function handleCoupleSpaceTimelineSettingsChanged(data) {
+  localStorage.setItem('coupleTimelineSettings_' + data.charId, JSON.stringify(data.settings || {}));
+  setupCoupleSpaceTimelineAutoTimer();
+}
+
+async function handleCoupleSpaceTimelineAiRequest(data) {
+  const iframe = document.getElementById('couple-space-iframe');
+  if (!iframe || !iframe.contentWindow) return;
+  const chat = state.chats[data.charId];
+  if (!chat) {
+    iframe.contentWindow.postMessage({ type: 'coupleSpaceTimelineAiResult', error: true }, '*');
+    return;
+  }
+  try {
+    const result = await generateCoupleSpaceTimelineAi(chat, data);
+    iframe.contentWindow.postMessage({
+      type: 'coupleSpaceTimelineAiResult',
+      title: result.title,
+      content: result.content,
+      category: result.category || 'moment'
+    }, '*');
+  } catch(err) {
+    console.error('Timeline AI error:', err);
+    iframe.contentWindow.postMessage({ type: 'coupleSpaceTimelineAiResult', error: true }, '*');
+  }
+}
+
+async function handleCoupleSpaceTimelineCommentRequest(data) {
+  const iframe = document.getElementById('couple-space-iframe');
+  if (!iframe || !iframe.contentWindow) return;
+  const chat = state.chats[data.charId];
+  if (!chat) {
+    iframe.contentWindow.postMessage({ type: 'coupleSpaceTimelineCommentResult', itemId: data.itemId, error: true }, '*');
+    return;
+  }
+  try {
+    const comment = await generateCoupleSpaceTimelineComment(chat, data);
+    iframe.contentWindow.postMessage({
+      type: 'coupleSpaceTimelineCommentResult',
+      itemId: data.itemId,
+      comment: comment
+    }, '*');
+  } catch(err) {
+    console.error('Timeline comment AI error:', err);
+    iframe.contentWindow.postMessage({ type: 'coupleSpaceTimelineCommentResult', itemId: data.itemId, error: true }, '*');
+  }
+}
+
+async function handleCoupleSpaceTimelineHeartRequest(data) {
+  const iframe = document.getElementById('couple-space-iframe');
+  if (!iframe || !iframe.contentWindow) return;
+  const chat = state.chats[data.charId];
+  if (!chat) return;
+
+  try {
+    const ctx = buildDiaryAiContext(chat);
+    const { proxyUrl, apiKey, model } = state.apiConfig;
+    if (!proxyUrl || !apiKey || !model) return;
+
+    const prompt = `你是"${ctx.charName}"。你的伴侣"${ctx.myNickname}"给时光轴上的记录"${data.itemContent}"点了爱心。
+你会不会也想给这条记录点爱心？考虑你的性格和你们的关系。
+请只回答 "yes" 或 "no"，不要其他内容。`;
+
+    const isGemini = proxyUrl === GEMINI_API_URL;
+    let response;
+    if (isGemini) {
+      const geminiConfig = toGeminiRequestData(model, apiKey, prompt, [{ role: 'user', content: '你要点爱心吗？' }]);
+      response = await fetch(geminiConfig.url, geminiConfig.data);
+    } else {
+      response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'system', content: prompt }, { role: 'user', content: '你要点爱心吗？' }],
+          temperature: 0.7
+        })
+      });
+    }
+    if (!response.ok) return;
+    const respData = await response.json();
+    const answer = getGeminiResponseText(respData).trim().toLowerCase();
+    const liked = answer.includes('yes');
+
+    iframe.contentWindow.postMessage({
+      type: 'coupleSpaceTimelineHeartResult',
+      itemId: data.itemId,
+      liked: liked
+    }, '*');
+  } catch(e) {
+    console.error('Timeline heart AI error:', e);
+  }
+}
+
+async function generateCoupleSpaceTimelineAi(chat, data) {
+  const { proxyUrl, apiKey, model } = state.apiConfig;
+  if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
+
+  const ctx = buildDiaryAiContext(chat);
+
+  const tlSettings = data.timelineSettings || {};
+  const maxCharVisible = tlSettings.visibleCharItems ?? 10;
+  const maxUserVisible = tlSettings.visibleUserItems ?? 10;
+
+  const items = data.existingItems || [];
+  const charItems = items.filter(i => i.author === 'char').slice(-maxCharVisible);
+  const userItems = items.filter(i => i.author === 'user').slice(-maxUserVisible);
+
+  let existingCharItemsText = '';
+  if (charItems.length > 0) {
+    existingCharItemsText = charItems.map(i =>
+      '- [' + i.category + '] "' + i.title + '": ' + i.content.substring(0, 100)
+    ).join('\n');
+  }
+
+  let existingUserItemsText = '';
+  if (userItems.length > 0) {
+    existingUserItemsText = userItems.map(i =>
+      '- [' + i.category + '] "' + i.title + '": ' + i.content.substring(0, 100)
+    ).join('\n');
+  }
+
+  let systemPrompt;
+  if (tlSettings.enableCustomPrompt && tlSettings.customPrompt) {
+    systemPrompt = tlSettings.customPrompt
+      .replace(/\{\{charName\}\}/g, ctx.charName)
+      .replace(/\{\{myNickname\}\}/g, ctx.myNickname)
+      .replace(/\{\{aiPersona\}\}/g, ctx.aiPersona || '')
+      .replace(/\{\{myPersona\}\}/g, ctx.myPersona || '')
+      .replace(/\{\{worldBook\}\}/g, ctx.worldBook ? '# 世界观\n' + ctx.worldBook : '')
+      .replace(/\{\{memoryContext\}\}/g, ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : '')
+      .replace(/\{\{shortTermMemory\}\}/g, ctx.shortTermMemory ? '# 最近的对话\n' + ctx.shortTermMemory : '')
+      .replace(/\{\{linkedMemory\}\}/g, ctx.linkedMemory ? '# 参考记忆\n' + ctx.linkedMemory : '')
+      .replace(/\{\{summaryContext\}\}/g, ctx.summaryContext ? '# 对话总结\n' + ctx.summaryContext : '')
+      .replace(/\{\{existingCharItems\}\}/g, existingCharItemsText ? '# 你之前的记录\n' + existingCharItemsText : '')
+      .replace(/\{\{existingUserItems\}\}/g, existingUserItemsText ? '# 伴侣的记录\n' + existingUserItemsText : '')
+      .replace(/\{\{currentTime\}\}/g, ctx.currentTime)
+      .replace(/\{\{anniversaryContext\}\}/g, ctx.anniversaryContext ? '# 纪念日\n' + ctx.anniversaryContext : '');
+  } else {
+    systemPrompt = `# 你的任务
+你是"${ctx.charName}"，现在要在情侣空间的时光轴上记录一个瞬间。
+时光轴是你们共同的回忆线，记录在一起的点点滴滴、重要时刻和美好瞬间。
+
+# 你的角色设定
+${ctx.aiPersona}
+
+# 你的伴侣
+- 昵称: ${ctx.myNickname}
+- 人设: ${ctx.myPersona}
+
+${ctx.worldBook ? '# 世界观\n' + ctx.worldBook : ''}
+
+${ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : ''}
+
+${ctx.shortTermMemory ? '# 最近的对话\n' + ctx.shortTermMemory : ''}
+
+${ctx.linkedMemory ? '# 参考记忆\n' + ctx.linkedMemory : ''}
+
+${ctx.summaryContext ? '# 对话总结\n' + ctx.summaryContext : ''}
+
+${ctx.anniversaryContext ? '# 纪念日\n' + ctx.anniversaryContext : ''}
+
+${ctx.checklistContext ? '# 情侣清单\n' + ctx.checklistContext : ''}
+
+${existingCharItemsText ? '# 你之前的记录（避免重复话题）\n' + existingCharItemsText : ''}
+
+${existingUserItemsText ? '# 伴侣的记录（参考）\n' + existingUserItemsText : ''}
+
+# 当前时间
+${ctx.currentTime}
+
+# 输出要求
+请以JSON格式返回，不要输出任何其他内容：
+{"title": "标题", "content": "正文", "category": "分类ID"}
+
+分类ID可选值: milestone(里程碑), moment(小确幸), growth(成长), memory(回忆), wish(心愿)
+选一个最符合内容的分类。
+
+# 写作要求
+- 以第一人称记录，像在时光轴上留下印记
+- 内容要基于你的记忆和最近发生的事
+- 可以是你们之间的重要时刻、温馨瞬间、成长感悟、美好回忆、未来心愿
+- 标题简洁有力，5-15字
+- 正文50-300字，有情感有细节
+- 语气要符合你的角色设定
+- 不要和已有的记录重复话题
+- 绝对不要提到你是AI`;
+  }
+
+  const messages = [{ role: 'user', content: '请记录一个瞬间。' }];
+
+  const isGemini = proxyUrl === GEMINI_API_URL;
+  let response;
+  if (isGemini) {
+    const geminiConfig = toGeminiRequestData(model, apiKey, systemPrompt, messages);
+    response = await fetch(geminiConfig.url, geminiConfig.data);
+  } else {
+    response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'system', content: systemPrompt }, ...messages],
+        temperature: state.globalSettings.apiTemperature || 0.8
+      })
+    });
+  }
+
+  if (!response.ok) throw new Error('API请求失败: ' + response.status);
+  const respData = await response.json();
+  const raw = getGeminiResponseText(respData).replace(/^```json\s*/, '').replace(/```$/, '').trim();
+  return JSON.parse(raw);
+}
+
+async function generateCoupleSpaceTimelineComment(chat, data) {
+  const { proxyUrl, apiKey, model } = state.apiConfig;
+  if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
+
+  const ctx = buildDiaryAiContext(chat);
+
+  const systemPrompt = `# 你的任务
+你是"${ctx.charName}"。时光轴上有一条记录，请你写一条评论。
+
+# 你的角色设定
+${ctx.aiPersona}
+
+# 你的伴侣
+- 昵称: ${ctx.myNickname}
+- 人设: ${ctx.myPersona}
+
+# 记录信息
+- 标题: ${data.itemTitle}
+- 内容: ${data.itemContent}
+- 分类: ${data.itemCategory || ''}
+- 作者: ${data.itemAuthor === 'user' ? ctx.myNickname : ctx.charName}
+
+${ctx.memoryContext ? '# 你的记忆\n' + ctx.memoryContext : ''}
+
+${ctx.shortTermMemory ? '# 最近的对话\n' + ctx.shortTermMemory : ''}
+
+# 当前时间
+${ctx.currentTime}
+
+# 要求
+直接返回评论文本，不要JSON格式，不要引号包裹。
+- 像真人评论一样自然
+- 字数在10-100字之间
+- 语气符合你的角色设定
+- 可以回应内容、表达感受、补充细节
+- 绝对不要提到你是AI`;
+
+  const messages = [{ role: 'user', content: '请写评论。' }];
+
+  const isGemini = proxyUrl === GEMINI_API_URL;
+  let response;
+  if (isGemini) {
+    const geminiConfig = toGeminiRequestData(model, apiKey, systemPrompt, messages);
+    response = await fetch(geminiConfig.url, geminiConfig.data);
+  } else {
+    response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'system', content: systemPrompt }, ...messages],
+        temperature: state.globalSettings.apiTemperature || 0.8
+      })
+    });
+  }
+
+  if (!response.ok) throw new Error('API请求失败: ' + response.status);
+  const respData = await response.json();
+  return getGeminiResponseText(respData).replace(/^["']|["']$/g, '').trim();
+}
+
+// ========== Auto Timeline Scheduler ==========
+let coupleSpaceTimelineTimers = {};
+
+function setupCoupleSpaceTimelineAutoTimer() {
+  Object.values(coupleSpaceTimelineTimers).forEach(t => clearInterval(t));
+  coupleSpaceTimelineTimers = {};
+
+  const spaces = getCoupleSpaces();
+  spaces.forEach(space => {
+    try {
+      const settings = JSON.parse(localStorage.getItem('coupleTimelineSettings_' + space.charId) || '{}');
+      if (settings.autoEnabled && settings.autoTime) {
+        scheduleTimelineAutoPost(space.charId, settings.autoTime);
+      }
+    } catch(e) {}
+  });
+}
+
+function scheduleTimelineAutoPost(charId, timeStr) {
+  coupleSpaceTimelineTimers[charId] = setInterval(() => {
+    const now = new Date();
+    const [h, m] = timeStr.split(':').map(Number);
+    if (now.getHours() === h && now.getMinutes() === m) {
+      const todayKey = 'coupleTimelineAutoLast_' + charId;
+      const lastDate = localStorage.getItem(todayKey);
+      const todayStr = now.toISOString().split('T')[0];
+      if (lastDate === todayStr) return;
+      localStorage.setItem(todayKey, todayStr);
+      triggerAutoTimelinePost(charId);
+    }
+  }, 60000);
+}
+
+async function triggerAutoTimelinePost(charId) {
+  const chat = state.chats[charId];
+  if (!chat) return;
+
+  const settings = JSON.parse(localStorage.getItem('coupleTimelineSettings_' + charId) || '{}');
+
+  if (settings.aiDecide) {
+    const ctx = buildDiaryAiContext(chat);
+    const { proxyUrl, apiKey, model } = state.apiConfig;
+    if (!proxyUrl || !apiKey || !model) return;
+
+    const prompt = `你是"${ctx.charName}"。根据你最近和"${ctx.myNickname}"的互动，判断是否有值得记录在时光轴上的瞬间。
+最近的对话:
+${ctx.shortTermMemory || '(无)'}
+${ctx.summaryContext ? '对话总结:\n' + ctx.summaryContext : ''}
+请只回答 "yes" 或 "no"，不要其他内容。`;
+
+    try {
+      const isGemini = proxyUrl === GEMINI_API_URL;
+      let response;
+      if (isGemini) {
+        const geminiConfig = toGeminiRequestData(model, apiKey, prompt, [{ role: 'user', content: '有值得记录的瞬间吗？' }]);
+        response = await fetch(geminiConfig.url, geminiConfig.data);
+      } else {
+        response = await fetch(`${proxyUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'system', content: prompt }, { role: 'user', content: '有值得记录的瞬间吗？' }],
+            temperature: 0.5
+          })
+        });
+      }
+      if (!response.ok) return;
+      const respData = await response.json();
+      const answer = getGeminiResponseText(respData).trim().toLowerCase();
+      if (!answer.includes('yes')) return;
+    } catch(e) { return; }
+  }
+
+  try {
+    const existingItems = JSON.parse(localStorage.getItem('coupleTimeline_' + charId) || '[]');
+    const result = await generateCoupleSpaceTimelineAi(chat, {
+      charId,
+      existingItems,
+      timelineSettings: settings
+    });
+
+    const newItem = {
+      id: 'tl_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+      title: result.title,
+      content: result.content,
+      category: result.category || 'moment',
+      author: 'char',
+      createdAt: Date.now(),
+      hearts: { char: true },
+      comments: []
+    };
+
+    existingItems.push(newItem);
+    localStorage.setItem('coupleTimeline_' + charId, JSON.stringify(existingItems));
+
+    const iframe = document.getElementById('couple-space-iframe');
+    if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({
+        type: 'coupleSpaceTimelineAutoResult',
+        item: newItem
+      }, '*');
+    }
+  } catch(err) {
+    console.error('Auto timeline post failed:', err);
+  }
+}
+
+// Initialize timeline timers
+if (typeof setTimeout !== 'undefined') {
+  setTimeout(setupCoupleSpaceTimelineAutoTimer, 9000);
+}
 
 // ========== Chat Screenshot for Album ==========
 
