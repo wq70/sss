@@ -455,7 +455,8 @@
   async function handleSmartImport(file) {
     if (!file) return;
 
-    await showCustomAlert("请稍候...", "正在读取并解析备份文件...");
+    // 用非阻塞的 toast 提示正在解析，不再用 await showCustomAlert 阻塞流程
+    showToast("正在读取并解析备份文件...", "info", 3000);
 
     try {
       const text = await file.text();

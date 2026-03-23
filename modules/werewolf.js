@@ -10,6 +10,26 @@
 //       openWitchActionModal, handleWerewolfRetry, checkGameOver
 // ========================================
 
+  // 狼人杀游戏状态（从 script.js 补充）
+  let werewolfGameState = {
+    isActive: false,
+    gameMode: null,
+    chatId: null,
+    players: [],
+    currentDay: 1,
+    currentPhase: 'setup',
+    nightActions: {},
+    gameLog: [],
+    discussionLog: [],
+    voteResults: {},
+    electionInfo: {
+      candidates: [],
+      votes: {}
+    },
+    sheriffId: null,
+    lastFailedAction: null,
+  };
+
   async function openWerewolfLobby(mode) {
     const modal = document.getElementById('werewolf-lobby-modal');
     const listEl = document.getElementById('werewolf-player-selection-list');
@@ -1902,6 +1922,8 @@ ${werewolfGameState.discussionLog.map(d => `${d.speaker}: ${d.content}`).join('\
   }
 
   // ========== 全局暴露 ==========
+  window.werewolfGameState = werewolfGameState;
+  window.openWerewolfLobby = openWerewolfLobby;
   window.initializeWerewolfGame = initializeWerewolfGame;
   window.handleWerewolfRetry = handleWerewolfRetry;
   window.handleManualWerewolfSummary = handleManualWerewolfSummary;
